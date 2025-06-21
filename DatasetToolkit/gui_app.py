@@ -16,7 +16,8 @@ try:
     from tools.convert_txt_to_Json import convert_multiple_txt_to_json
     from tools.convert_unicode_to_characters import normalize_unicode_in_jsonl
     from tools.validate_dataset import validate_and_clean_jsonl
-    # Note: Other scripts like `remove_system_prompt` would need similar refactoring to be included.
+    # --- NEW IMPORT (Token Counter REMOVED) ---
+    from tools.remove_system_prompt import remove_system_prompt_from_jsonl
 except ImportError as e:
     messagebox.showerror("Fatal Error", f"Could not import a tool script. Please ensure the 'tools' subfolder exists and contains all required scripts.\n\nError: {e}")
     sys.exit(1)
@@ -41,7 +42,7 @@ class TextRedirector:
 class DatasetToolkit(bstrap.Window):
     def __init__(self):
         super().__init__(themename="superhero", title="Dataset Processing Toolkit")
-        self.geometry("800x650")
+        self.geometry("800x650") # Reverted to original size
         self.minsize(700, 550)
 
         container = ttk.Frame(self, padding=10)
@@ -59,6 +60,9 @@ class DatasetToolkit(bstrap.Window):
         self.create_json_to_jsonl_tab()
         self.create_unicode_normalize_tab()
         self.create_validate_tab()
+        # --- NEW TAB (Token Counter REMOVED) ---
+        self.create_remove_system_prompt_tab()
+
 
         # Log window
         log_frame = ttk.LabelFrame(container, text="Log Output", padding=5)
@@ -74,7 +78,7 @@ class DatasetToolkit(bstrap.Window):
         sys.stdout = TextRedirector(self.log_text)
         sys.stderr = TextRedirector(self.log_text)
 
-        print("Dataset Toolkit v1.0 Loaded. Select a tool to begin.")
+        print("Dataset Toolkit v1.1 Loaded. Select a tool to begin.")
 
     def create_io_widgets(self, parent, io_type='file', label_text="Input File:", file_types=None):
         frame = ttk.Frame(parent)
@@ -205,6 +209,36 @@ class DatasetToolkit(bstrap.Window):
         in_file_var = self.create_io_widgets(tab, 'file', "Input File:", [("JSONL files", "*.jsonl")])
         out_file_var = self.create_io_widgets(tab, 'save_file', "Output File:", [("JSONL files", "*.jsonl")])
         run_btn = ttk.Button(tab, text="Run Validation", command=lambda: self.execute_tool(validate_and_clean_jsonl, "Validate JSONL", input_file=in_file_var.get(), output_file=out_file_var.get()), bootstyle="success")
+        run_btn.pack(pady=20)
+
+    # --- NEW TAB IMPLEMENTATION ---
+
+    def create_remove_system_prompt_tab(self):
+        tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.add(tab, text="Remove Sys Prompt")
+        ttk.Label(tab, text="Removes the first message in a conversation if it's a system prompt.", bootstyle="primary").pack(fill=X, pady=10)
+        
+        in_file_var = self.create_io_widgets(tab, 'file', "Input File:", [("JSONL files", "*.jsonl")])
+        out_file_var = self.create_io_widgets(tab, 'save_file', "Output File:", [("JSONL files", "*.jsonl")])
+
+        options_frame = ttk.LabelFrame(tab, text="Options", padding=10)
+        options_frame.pack(fill=X, pady=10)
+        
+        system_role_var = tk.StringVar(value="system")
+        
+        ttk.Label(options_frame, text="System Role Name:").grid(row=0, column=0, sticky=W, pady=2)
+        ttk.Entry(options_frame, textvariable=system_role_var).grid(row=0, column=1, sticky=EW, pady=2)
+        options_frame.columnconfigure(1, weight=1)
+
+        run_btn = ttk.Button(tab, text="Run Removal", 
+                             command=lambda: self.execute_tool(
+                                 remove_system_prompt_from_jsonl, 
+                                 "Remove System Prompt",
+                                 input_file=in_file_var.get(),
+                                 output_file=out_file_var.get(),
+                                 system_role=system_role_var.get()
+                             ), 
+                             bootstyle="success")
         run_btn.pack(pady=20)
 
 
