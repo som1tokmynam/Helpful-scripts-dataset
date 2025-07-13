@@ -1,5 +1,3 @@
-# tools/DeslopTool.py - CORRECTED VERSION WITH MISSING FUNCTION RESTORED
-
 import json
 from pathlib import Path
 
@@ -39,7 +37,6 @@ def filter_conversations(conversations, filter_criteria, threshold=None):
     clean_conversations = []
     removed_count = 0
 
-    # --- MODE 1: Simple "remove any match" filtering (default) ---
     if threshold is None:
         print("[*] Filtering mode: Remove any conversation with a matched phrase.")
         for conv in conversations:
@@ -54,8 +51,6 @@ def filter_conversations(conversations, filter_criteria, threshold=None):
             else:
                 clean_conversations.append(conv)
         return clean_conversations, removed_count
-
-    # --- MODE 2: Threshold-based statistical filtering ---
     else:
         print(f"[*] Filtering mode: Threshold-based removal (threshold = {threshold}).")
         
@@ -86,35 +81,31 @@ def filter_conversations(conversations, filter_criteria, threshold=None):
         
         return clean_conversations, removed_count
 
-# --- THIS IS THE MISSING FUNCTION THAT HAS BEEN RESTORED ---
 def write_filtered_jsonl(filtered_data, output_file_path):
     """Writes the filtered data to a new JSONL file."""
+    # Ensure the parent directory exists, without creating the tool's own sub-folder
+    Path(output_file_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_file_path, 'w', encoding='utf-8') as file:
         for conversation in filtered_data:
             json.dump(conversation, file, ensure_ascii=False)
             file.write('\n')
 
-def filter_dataset(dataset_file, output_dir, filter_files, threshold=None):
+# --- CHANGE: Simplified function signature and logic ---
+def filter_dataset(dataset_file, output_file, filter_files, threshold=None):
     """Main function to orchestrate the deslopping process."""
-    if not dataset_file or not output_dir or not filter_files or not filter_files[0]:
-        raise ValueError("Input dataset, output directory, and filter file must all be specified.")
+    if not dataset_file or not output_file or not filter_files or not filter_files[0]:
+        raise ValueError("Input dataset, output file, and filter file must all be specified.")
 
     filter_criteria = load_filter_criteria(filter_files)
     original_data = load_jsonl(dataset_file)
     
     filtered_data, removed_count = filter_conversations(original_data, filter_criteria, threshold=threshold)
 
-    output_folder = Path(output_dir)
-    output_folder.mkdir(parents=True, exist_ok=True)
-
-    dataset_name = Path(dataset_file).stem
-    output_file_path = output_folder / f"{dataset_name}_deslopped.jsonl"
-    
-    # This call will now work correctly
-    write_filtered_jsonl(filtered_data, output_file_path)
+    # Directly write to the specified output file
+    write_filtered_jsonl(filtered_data, output_file)
 
     print("\n[+] Deslopping Complete!")
     print(f"    Original conversations: {len(original_data)}")
     print(f"    Conversations removed: {removed_count}")
     print(f"    Remaining conversations: {len(filtered_data)}")
-    print(f"    Filtered output written to: {output_file_path}")
+    print(f"    Filtered output written to: {output_file}")
