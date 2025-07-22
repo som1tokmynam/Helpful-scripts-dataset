@@ -19,7 +19,7 @@ def is_junk(turn):
 
 def fix_dataset_issues(input_file: str, output_file: str):
     """
-    Reads a JSONL file and applies a definitive 6-stage cleaning and repair process
+    Reads a JSONL file and applies a definitive 7-stage cleaning and repair process
     to the 'conversations' list in each line.
     """
     if not input_file or not output_file:
@@ -49,8 +49,7 @@ def fix_dataset_issues(input_file: str, output_file: str):
                     if len(pass1_turns) < len(original_turns):
                         fixes_this_line += (len(original_turns) - len(pass1_turns))
 
-                    # --- THE CRITICAL FIX: STAGE 2A ---
-                    # This new stage iteratively splits turns containing multiple speaker blocks.
+                    # --- Stage 2A: Iterative Split - Split turns with multiple speaker blocks ---
                     pass2a_turns = []
                     split_pattern = r'(\n\n\{narrator\}:|\n\n\{user\}:)'
                     for turn in pass1_turns:
@@ -138,10 +137,50 @@ def fix_dataset_issues(input_file: str, output_file: str):
                             i += 3
                         else:
                             pass4_turns.append(current_turn); i += 1
+                            
+                    # --- Stage 5: OOC Attribution Correction ---
+                    # This stage ensures that in a sequence of OOC turns, if no 'human' turn is present,
+                    # the first turn is corrected to be from 'human', assuming it's a user question.
+                    pass5_turns = []
+                    i = 0
+                    num_turns_s4 = len(pass4_turns)
+                    while i < num_turns_s4:
+                        current_turn = pass4_turns[i]
+                        current_value = current_turn.get('value', '').strip()
 
-                    # --- Stage 5: Post-Scrub - Final removal of any turns that became junk ---
-                    initial_count = len(pass4_turns)
-                    final_turns = [turn for turn in pass4_turns if not is_junk(turn)]
+                        if current_value.lower().startswith('ooc:'):
+                            # Found the start of a potential OOC block
+                            block_start_index = i
+                            block_end_index = i
+                            while (block_end_index + 1 < num_turns_s4 and
+                                   pass4_turns[block_end_index + 1].get('value', '').strip().lower().startswith('ooc:')):
+                                block_end_index += 1
+                            
+                            ooc_block = pass4_turns[block_start_index : block_end_index + 1]
+                            has_human_turn = any(turn.get('from') == 'human' for turn in ooc_block)
+                            
+                            if not has_human_turn and ooc_block:
+                                # No 'human' turn in OOC block. Correct the first turn if it's from 'gpt'.
+                                first_turn = ooc_block[0]
+                                if first_turn.get('from') == 'gpt':
+                                    corrected_turn = first_turn.copy()
+                                    corrected_turn['from'] = 'human'
+                                    pass5_turns.append(corrected_turn)
+                                    fixes_this_line += 1
+                                    pass5_turns.extend(ooc_block[1:]) # Append the rest of the block
+                                else:
+                                    pass5_turns.extend(ooc_block) # First turn isn't 'gpt', add as-is
+                            else:
+                                pass5_turns.extend(ooc_block) # Block has a human turn, add as-is
+                            
+                            i = block_end_index + 1 # Move index past the processed block
+                        else:
+                            pass5_turns.append(current_turn) # Not an OOC turn, just append
+                            i += 1
+
+                    # --- Stage 6: Post-Scrub - Final removal of any turns that became junk ---
+                    initial_count = len(pass5_turns)
+                    final_turns = [turn for turn in pass5_turns if not is_junk(turn)]
                     if initial_count != len(final_turns): fixes_this_line += (initial_count - len(final_turns))
 
                     if fixes_this_line > 0:

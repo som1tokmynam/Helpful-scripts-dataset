@@ -7,7 +7,9 @@ import ttkbootstrap as bstrap
 from ttkbootstrap.constants import *
 
 try:
+    # --- Tool Imports ---
     from tools.combinejsonl import combine_jsonl_files
+    from tools.cleanup_text import cleanup_text_in_jsonl
     from tools.cleanasterisks import process_jsonl_file as clean_asterisks_in_jsonl
     from tools.cleanupjsonl_last_user_turn import main as remove_last_user_turn
     from tools.DeslopTool import filter_dataset as deslop_dataset
@@ -19,7 +21,8 @@ try:
     from tools.convert_pretraining_json_to_jsonl import convert_pretraining_json_to_jsonl
     from tools.character_counter import count_characters_in_jsonl
     from tools.remove_standalone_names import remove_standalone_names_main
-    from tools.fix_ooc_misattribution import fix_dataset_issues 
+    from tools.fix_ooc_misattribution import fix_dataset_issues
+    from tools.find_unused_chunks_tool import find_unused_text_chunks # <-- NEW TOOL IMPORTED
 except ImportError as e:
     messagebox.showerror("Fatal Error", f"Could not import a tool script. Please ensure the 'tools' subfolder exists and contains all required scripts.\n\nError: {e}")
     sys.exit(1)
@@ -39,8 +42,8 @@ class TextRedirector:
 class DatasetToolkit(bstrap.Window):
     def __init__(self):
         super().__init__(themename="superhero", title="Dataset Processing Toolkit")
-        self.geometry("1100x750")
-        self.minsize(900, 600)
+        self.geometry("1100x800")
+        self.minsize(900, 650)
 
         main_pane = ttk.PanedWindow(self, orient=HORIZONTAL)
         main_pane.pack(fill=BOTH, expand=True, padx=10, pady=(10,0))
@@ -53,14 +56,15 @@ class DatasetToolkit(bstrap.Window):
         
         self.frames = {}
         
-        pipeline_tabs = {} 
+        # --- MODIFIED: Added FindUnusedTab and sorted alphabetically for clarity ---
         extra_tool_tabs = {
-            "CombineTab": (CombineTab, "Combine JSONL"),
-            "ValidateTab": (ValidateTab, "Validate JSONL"),
             "CharCounterTab": (CharCounterTab, "Character Counter"),
+            "CombineTab": (CombineTab, "Combine JSONL"),
+            "FindUnusedTab": (FindUnusedTab, "Find Unused Chunks"),
+            "PretrainConvertTab": (PretrainConvertTab, "Pre-train Convert"),
             "RemovePromptTab": (RemovePromptTab, "Remove Sys Prompt"),
             "TxtToJsonTab": (TxtToJsonTab, "TXT -> JSON"),
-            "PretrainConvertTab": (PretrainConvertTab, "Pre-train Convert")
+            "ValidateTab": (ValidateTab, "Validate JSONL"),
         }
 
         pipeline_frame = ProcessingPipelineTab(self.content_frame, self)
@@ -79,7 +83,8 @@ class DatasetToolkit(bstrap.Window):
         ttk.Separator(self.nav_frame, orient=HORIZONTAL).pack(fill=X, pady=10)
         ttk.Label(self.nav_frame, text="Extra Tools", bootstyle="secondary").pack(fill=X, pady=(0,5))
         
-        for name, (F, title) in extra_tool_tabs.items():
+        # --- MODIFIED: Loop creates buttons based on the sorted dictionary ---
+        for name, (F, title) in sorted(extra_tool_tabs.items(), key=lambda item: item[1][1]):
             self.add_nav_button(title, name)
         
         log_frame = ttk.LabelFrame(self, text="Log Output", padding=5)
@@ -96,7 +101,7 @@ class DatasetToolkit(bstrap.Window):
         sys.stderr = TextRedirector(self.log_text)
 
         self.show_frame("ProcessingPipelineTab")
-        print("Dataset Toolkit v3.2 Loaded. Pipeline is streamlined.")
+        print("Dataset Toolkit v3.4 Loaded. Added 'Find Unused Chunks' tool.")
 
     def resource_path(self, relative_path):
         try:
@@ -148,8 +153,7 @@ class DatasetToolkit(bstrap.Window):
             print(f"\n--- ERROR: {error_message} ---")
             messagebox.showerror("Error", error_message)
 
-    # --- CHANGE: This function is now much simpler ---
-    def run_pipeline(self, initial_input_file, steps_to_run, deslop_filter_file, deslop_threshold):
+    def run_pipeline(self, initial_input_file, steps_to_run, deslop_filter_file, deslop_threshold, output_prefix):
         self.log_text.configure(state='normal')
         self.log_text.delete('1.0', 'end')
         self.log_text.configure(state='disabled')
@@ -158,45 +162,55 @@ class DatasetToolkit(bstrap.Window):
             messagebox.showerror("Error", "Please select a valid initial input file.")
             return
 
-        # CHANGE: Updated args for step 7 to use `output_file`
         pipeline_definition = {
             1: {"name": "Convert JSON to JSONL", "func": convert_json_to_jsonl, "args": lambda i, o: {"input_path": i, "output_path": o}},
             2: {"name": "Normalize Unicode", "func": normalize_unicode_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            3: {"name": "Fix OOC Issues", "func": fix_dataset_issues, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            4: {"name": "Remove Standalone Names", "func": remove_standalone_names_main, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            5: {"name": "Clean Asterisks", "func": clean_asterisks_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            6: {"name": "Trim Last Turn", "func": remove_last_user_turn, "args": lambda i, o: type('Args', (), {'input_file': i, 'output_file': o, 'conversation_key': 'conversations', 'role_key': 'from', 'user_role': 'human'})},
-            7: {"name": "Deslop Tool", "func": deslop_dataset, "args": lambda i, o: {"dataset_file": i, "output_file": o, "filter_files": [deslop_filter_file], "threshold": deslop_threshold}}
+            3: {"name": "Cleanup Separators", "func": cleanup_text_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            4: {"name": "Fix OOC Issues", "func": fix_dataset_issues, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            5: {"name": "Remove Standalone Names", "func": remove_standalone_names_main, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            6: {"name": "Clean Asterisks", "func": clean_asterisks_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            7: {"name": "Trim Last Turn", "func": remove_last_user_turn, "args": lambda i, o: type('Args', (), {'input_file': i, 'output_file': o, 'conversation_key': 'conversations', 'role_key': 'from', 'user_role': 'human'})},
+            8: {"name": "Deslop Tool", "func": deslop_dataset, "args": lambda i, o: {"dataset_file": i, "output_file": o, "filter_files": [deslop_filter_file], "threshold": deslop_threshold}}
         }
         
         try:
+            last_step_to_run = 0
+            for i in range(8, 0, -1):
+                if steps_to_run.get(i).get():
+                    last_step_to_run = i
+                    break
+            
             p = Path(initial_input_file)
             current_input_path = str(p.resolve())
-            base_name = p.stem
+            original_filename = p.name
             input_dir = p.parent
 
             print(f"--- Starting Processing Pipeline for: {p.name} ---\n")
             final_output_file = ""
 
-            for step_num in range(1, 8):
+            for step_num in range(1, 9):
                 if steps_to_run.get(step_num).get():
                     step_info = pipeline_definition[step_num]
                     step_name = step_info["name"]
                     
-                    output_path = str(input_dir / f"{base_name}_step{step_num}.jsonl")
+                    is_final_step = (step_num == last_step_to_run)
+                    if is_final_step and output_prefix:
+                        safe_prefix = "".join(c for c in output_prefix if c.isalnum() or c in ('_','-')).strip()
+                        output_path = str(input_dir / f"{safe_prefix}{p.stem}.jsonl")
+                    else:
+                        output_path = str(input_dir / f"{p.stem}_step{step_num}.jsonl")
+                    
                     final_output_file = output_path
 
                     print(f"--- Running Step {step_num}: {step_name} ---")
                     print(f"Input: {Path(current_input_path).name}")
                     print(f"Output: {Path(output_path).name}")
                     
-                    # CHANGE: The special case for Step 7 is no longer needed.
-                    # It's now handled like any other standard tool.
-                    if step_num == 6:
+                    if step_num == 7:
                         args_obj = step_info["args"](current_input_path, output_path)
                         remove_last_user_turn(args=args_obj)
-                    else: # All other tools, including Deslop
-                        if step_num == 7 and (not deslop_filter_file or not Path(deslop_filter_file).exists()):
+                    else:
+                        if step_num == 8 and (not deslop_filter_file or not Path(deslop_filter_file).exists()):
                             raise ValueError("Deslop filter file is not specified or does not exist.")
                         kwargs = step_info["args"](current_input_path, output_path)
                         step_info["func"](**kwargs)
@@ -239,11 +253,12 @@ class ProcessingPipelineTab(BaseTab):
         steps_info = [
             "Step 1: Convert JSON to JSONL",
             "Step 2: Normalize Unicode Characters",
-            "Step 3: Fix OOC Misattribution",
-            "Step 4: Remove Standalone Names/Roles",
-            "Step 5: Clean Enclosing Asterisks",
-            "Step 6: Trim Last User Turn",
-            "Step 7: Deslop Tool (Filter Content)"
+            "Step 3: Cleanup Separators (---, **)",
+            "Step 4: Fix OOC Misattribution",
+            "Step 5: Remove Standalone Names/Roles",
+            "Step 6: Clean Enclosing Asterisks",
+            "Step 7: Trim Last User Turn",
+            "Step 8: Deslop Tool (Filter Content)"
         ]
 
         for i, text in enumerate(steps_info, 1):
@@ -252,7 +267,7 @@ class ProcessingPipelineTab(BaseTab):
             chk = ttk.Checkbutton(steps_frame, text=text, variable=var, bootstyle="primary")
             chk.pack(anchor=W, padx=10, pady=3)
 
-        deslop_frame = ttk.LabelFrame(self, text="Step 7: Deslop Options", padding=10)
+        deslop_frame = ttk.LabelFrame(self, text="Step 8: Deslop Options", padding=10)
         deslop_frame.pack(fill=X, pady=10, padx=5)
         
         self.filter_file_var = self.controller.create_io_widgets(deslop_frame, 'file', "Filter File:", [("Text files", "*.txt")])
@@ -276,6 +291,12 @@ class ProcessingPipelineTab(BaseTab):
         threshold_check.pack(side=LEFT, padx=5)
         self.threshold_spinbox.pack(side=LEFT, padx=5)
 
+        prefix_frame = ttk.LabelFrame(self, text="Final Output Naming", padding=10)
+        prefix_frame.pack(fill=X, pady=(10,5), padx=5)
+        ttk.Label(prefix_frame, text="Prefix for final file:").pack(side=LEFT, padx=(5,10))
+        self.prefix_var = tk.StringVar(value="cleaned_")
+        ttk.Entry(prefix_frame, textvariable=self.prefix_var).pack(side=LEFT, fill=X, expand=True, padx=5)
+        
         run_btn = ttk.Button(self, text="Run Processing Pipeline", command=self.run, bootstyle="success-lg")
         run_btn.pack(pady=20, ipady=10)
 
@@ -292,10 +313,32 @@ class ProcessingPipelineTab(BaseTab):
             initial_input_file=self.in_file_var.get(),
             steps_to_run=self.steps_vars,
             deslop_filter_file=self.filter_file_var.get(),
-            deslop_threshold=threshold_value
+            deslop_threshold=threshold_value,
+            output_prefix=self.prefix_var.get()
         )
 
-# (The rest of the file is identical)
+# --- NEW: The tab class for the "Find Unused Chunks" tool ---
+class FindUnusedTab(BaseTab):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Find Unused Chunks", font=("-size 12 -weight bold")).pack(pady=10)
+        ttk.Label(self, text="Compares a master JSON list to a resulting JSON file to find and save unused text chunks.", 
+                  wraplength=550, bootstyle="primary").pack(fill=X, pady=10)
+        
+        master_file_var = self.controller.create_io_widgets(self, 'file', "Master File:", [("JSON files", "*.json")])
+        resulting_file_var = self.controller.create_io_widgets(self, 'file', "Resulting File:", [("JSON files", "*.json")])
+        output_file_var = self.controller.create_io_widgets(self, 'save_file', "Output File:", [("JSON files", "*.json")])
+        
+        run_btn = ttk.Button(self, text="Find Unused Chunks", 
+                             command=lambda: self.controller.execute_tool(
+                                 find_unused_text_chunks, 
+                                 "Find Unused Chunks", 
+                                 master_file=master_file_var.get(), 
+                                 resulting_file=resulting_file_var.get(), 
+                                 output_file=output_file_var.get()
+                             ), bootstyle="success")
+        run_btn.pack(pady=20)
+
 
 class CombineTab(BaseTab):
     def __init__(self, parent, controller):

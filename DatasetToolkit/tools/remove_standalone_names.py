@@ -3,19 +3,29 @@ import re
 import os
 
 # Regex pattern breakdown:
-# ^                                 - Matches the beginning of the string.
+# ^(...|...) - Match either Pattern A or Pattern B at the start of the string.
 #
-# Outer non-capturing group (?: ... | ... ) allows EITHER of the two main patterns to match.
-# This ensures we handle both multi-line standalone blocks and single-line {role}: prefixes.
+# Pattern A: Multi-line block remover (greedy).
+# (?: ... )+  - Matches one or more "removable lines".
+#   [\s]* - Leading whitespace on the line.
+#   (?: ... | ...) - The line content can be EITHER a {role} tag OR a standalone name.
+#     \{[a-zA-Z]+\} - A {role} tag, e.g., {user}, {narrator}. This is checked first as it's more specific.
+#     | - OR
+#     [\w\s'\"-]+ - A standalone name, e.g., "The King", "NPC-1". The character set avoids matching '{' to prevent ambiguity.
+#   (?::)? - An optional colon after the role/name.
+#   \s*\n - Any whitespace and a mandatory newline, signifying the end of the line.
+#
+# Pattern B: Single-line {role} prefix remover.
+#   [\s]*\{[a-zA-Z]+\}(?::)?\s*
+#   This is the fallback for cases like "{user}: Hello" where there's no newline.
+#   It's placed second because the multi-line pattern is more comprehensive and should be tried first.
 pattern_to_remove = re.compile(
     r"^(?:"
-    # Pattern 1: Multi-line standalone names/roles (original behavior)
-    r"(?:[\s]*\{[a-zA-Z]+\}(?::)?\s*\n)?"     # Optional initial {role} line ending in \n
-    # We replaced \w+ with a character set [\w\s'\"-]+ to include spaces, quotes, and hyphens.
-    r"(?:[\s]*([\w\s'\"-]+)(?::)?\s*\n)+"     # One or more standalone name/role lines ending in \n
-    r"|"                                      # OR
-    # Pattern 2: Single-line {role} prefix (new behavior for cases like "{user}: "I'm")
-    r"[\s]*\{[a-zA-Z]+\}(?::)?\s*"            # {role} tag, optional colon, and any trailing whitespace (not necessarily \n)
+    # Pattern A: One or more "removable lines" (standalone names or roles ending in a newline)
+    r"(?:[\s]*(?:\{[a-zA-Z]+\}|[\w\s'\"-]+)(?::)?\s*\n)+"
+    r"|"
+    # Pattern B: A single {role} prefix, not necessarily ending in a newline
+    r"[\s]*\{[a-zA-Z]+\}(?::)?\s*"
     r")"
 )
 
@@ -90,35 +100,3 @@ def remove_standalone_names_main(input_file: str, output_file: str):
         print(f"File I/O Error: {e}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
-
-if __name__ == '__main__':
-    # Expanded example data to test all new cases
-    sample_data = [
-        # Original problem case
-        {"conversations": [{"from": "gpt", "value": "Scorch:\nScorch\n*The iron gate slams shut..."}]},
-        # New cases with special characters
-        {"conversations": [{"from": "gpt", "value": "Valerius \"The Scourge\":\nThe plan is simple."}]},
-        {"conversations": [{"from": "gpt", "value": "Brother-prophet ka'el:\nWe must act now."}]},
-        {"conversations": [{"from": "gpt", "value": "Ka'el:\nIndeed."}]},
-        # Multi-line case with special characters
-        {"conversations": [{"from": "gpt", "value": "Brother-prophet ka'el:\nKa'el:\nThis text should remain."}]},
-        # Case with a {role} tag that should be removed
-        {"conversations": [{"from": "gpt", "value": "{user}:Tell me a story."}]},
-        # A normal case that should not be changed
-        {"conversations": [{"from": "gpt", "value": "This is a normal sentence that should not be modified."}]}
-    ]
-
-    test_input_file = "test_input_names.jsonl"
-    test_output_file = "test_output_names_cleaned.jsonl"
-
-    with open(test_input_file, 'w', encoding='utf-8') as f:
-        for item in sample_data:
-            f.write(json.dumps(item) + '\n')
-
-    print(f"Created '{test_input_file}' for testing.")
-    remove_standalone_names_main(test_input_file, test_output_file)
-    print(f"\nOutput saved to '{test_output_file}'. You can check its contents.")
-    print("-" * 20)
-    print("Cleaned file content:")
-    with open(test_output_file, 'r', encoding='utf-8') as f:
-        print(f.read())
