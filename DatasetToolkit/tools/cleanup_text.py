@@ -5,17 +5,14 @@ import re
 def cleanup_text_in_jsonl(input_file: str, output_file: str):
     """
     Reads a JSONL file, cleans specific text patterns from the 'value' field
-    of each turn in the 'conversations' list, and writes to a new file.
-
-    Patterns removed:
-    - Scene markers like '**Scene:**' or ''Scene:'' (with surrounding whitespace).
-    - Standalone '---' separators (with surrounding whitespace).
-    - Double asterisks '**'.
-    - The phrase '-- end character info --'.
+    of each turn, and removes turns that become empty after cleaning.
     """
     if not input_file or not output_file:
         print("Error: Input and Output file paths must be provided.")
         return
+
+    # Regex to find a line that ONLY contains a speaker name (e.g., "Firestorm:")
+    speaker_only_pattern = re.compile(r"^[\s\n]*[\w\s]+:[\s\n]*$", re.IGNORECASE)
 
     total_lines_read, lines_with_changes = 0, 0
 
@@ -40,24 +37,40 @@ def cleanup_text_in_jsonl(input_file: str, output_file: str):
                             original_value = turn['value']
                             cleaned_value = original_value
 
-                            # --- THIS IS THE CORRECTED LOGIC ---
-                            # Replace separator blocks with a double newline for a clean paragraph break.
-                            # We use re.IGNORECASE for robustness against "scene:", "SCENE:", etc.
-                            # The | (OR) operator in the regex handles multiple scene marker formats.
-                            # Asterisks need to be escaped with a backslash.
+                            # 1. Check if the turn is just a speaker name and remove it.
+                            if speaker_only_pattern.match(cleaned_value):
+                                made_change_this_line = True
+                                continue
+
+                            # 2. Clean up block-level dividers and specific scene markers.
+                            #    This correctly handles 'Scene:' without affecting other quoted text.
                             cleaned_value = re.sub(r"(\n\s*)*(\*\*Scene:\*\*|'Scene:')\s*(\n\s*)*", '\n\n', cleaned_value, flags=re.IGNORECASE)
                             cleaned_value = re.sub(r'(\n\s*)*-- end character info --\s*(\n\s*)*', '\n\n', cleaned_value, flags=re.IGNORECASE)
-                            cleaned_value = re.sub(r'(\n\s*)*---\s*(\n\s*)*', '\n\n', cleaned_value)
+                            cleaned_value = re.sub(r'(\n\s*)*-{2,}\s*(\n\s*)*', '\n\n', cleaned_value)
+                            cleaned_value = re.sub(r'^\s*[\*\s]+\s*$', '', cleaned_value, flags=re.MULTILINE)
 
-                            # Remove double asterisks (for emphasis, etc.)
-                            cleaned_value = cleaned_value.replace('**', '')
+                            # 3. Remove markdown-like formatting characters.
+                            #    Removes **, ***, etc., but preserves single * for italics.
+                            cleaned_value = re.sub(r'\*{2,}', '', cleaned_value)
 
-                            # Final strip removes any leading/trailing whitespace or newlines,
-                            # which perfectly handles cases where separators were at the start/end of the text.
+                            # --- CORRECTED LOGIC ---
+                            # The overly broad rule for single quotes has been REMOVED
+                            # to avoid damaging dialogue like 'Hello, how are you?'.
+                            # The 'Scene:' rule above is sufficient for specific cases.
+                            # --- END CORRECTION ---
+
+                            # 4. Consolidate whitespace.
+                            cleaned_value = re.sub(r'\n(\s*\n){2,}', '\n\n', cleaned_value)
+
+                            # 5. Final cleanup.
                             cleaned_value = cleaned_value.strip()
 
                             if cleaned_value != original_value:
                                 made_change_this_line = True
+
+                            # 6. If cleaning made the turn empty, skip it.
+                            if not cleaned_value:
+                                continue
 
                             turn['value'] = cleaned_value
 
@@ -66,8 +79,9 @@ def cleanup_text_in_jsonl(input_file: str, output_file: str):
                     if made_change_this_line:
                         lines_with_changes += 1
 
-                    data['conversations'] = cleaned_conversations
-                    outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+                    if cleaned_conversations:
+                        data['conversations'] = cleaned_conversations
+                        outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
 
                 except json.JSONDecodeError:
                     print(f"Warning: Line {line_num} is not valid JSON. Copying as-is.")

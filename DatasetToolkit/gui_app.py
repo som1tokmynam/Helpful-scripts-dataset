@@ -14,17 +14,21 @@ try:
     from tools.cleanupjsonl_last_user_turn import main as remove_last_user_turn
     from tools.DeslopTool import filter_dataset as deslop_dataset
     from tools.convert_json_to_jsonl import convert_json_to_jsonl
-    from tools.convert_txt_to_Json import convert_multiple_txt_to_json
+    from tools.convert_txt_to_jsonl import convert_multiple_txt_to_jsonl
     from tools.convert_unicode_to_characters import normalize_unicode_in_jsonl
     from tools.validate_dataset import validate_and_clean_jsonl
     from tools.remove_system_prompt import remove_system_prompt_from_jsonl
     from tools.convert_pretraining_json_to_jsonl import convert_pretraining_json_to_jsonl
     from tools.character_counter import count_characters_in_jsonl
     from tools.remove_standalone_names import remove_standalone_names_main
-    from tools.fix_ooc_misattribution import fix_dataset_issues
-    from tools.find_unused_chunks_tool import find_unused_text_chunks # <-- NEW TOOL IMPORTED
+    from tools.find_unused_chunks_tool import find_unused_text_chunks
+    from tools.fix_choices_turns import fix_choices_tags_in_jsonl
+    from tools.fix_thinking_turns import process_jsonl_file as fix_thinking_and_collapsed_turns
+    from tools.remove_failed_scenes import remove_failed_scenes_main
+    from tools.fix_turn_structure import fix_turn_structure
+
 except ImportError as e:
-    messagebox.showerror("Fatal Error", f"Could not import a tool script. Please ensure the 'tools' subfolder exists and contains all required scripts.\n\nError: {e}")
+    messagebox.showerror("Fatal Error", f"Could not import a tool script. Please ensure the 'tools' subfolder exists and contains all required scripts (including fix_turn_structure.py).\n\nError: {e}")
     sys.exit(1)
 
 
@@ -42,8 +46,8 @@ class TextRedirector:
 class DatasetToolkit(bstrap.Window):
     def __init__(self):
         super().__init__(themename="superhero", title="Dataset Processing Toolkit")
-        self.geometry("1100x800")
-        self.minsize(900, 650)
+        self.geometry("1367x900")
+        self.minsize(1367, 900)
 
         main_pane = ttk.PanedWindow(self, orient=HORIZONTAL)
         main_pane.pack(fill=BOTH, expand=True, padx=10, pady=(10,0))
@@ -56,20 +60,23 @@ class DatasetToolkit(bstrap.Window):
         
         self.frames = {}
         
-        # --- MODIFIED: Added FindUnusedTab and sorted alphabetically for clarity ---
         extra_tool_tabs = {
             "CharCounterTab": (CharCounterTab, "Character Counter"),
             "CombineTab": (CombineTab, "Combine JSONL"),
             "FindUnusedTab": (FindUnusedTab, "Find Unused Chunks"),
             "PretrainConvertTab": (PretrainConvertTab, "Pre-train Convert"),
             "RemovePromptTab": (RemovePromptTab, "Remove Sys Prompt"),
-            "TxtToJsonTab": (TxtToJsonTab, "TXT -> JSON"),
+            "TxtToJsonTab": (TxtToJsonTab, "TXT -> JSONL"),
             "ValidateTab": (ValidateTab, "Validate JSONL"),
         }
 
-        pipeline_frame = ProcessingPipelineTab(self.content_frame, self)
-        self.frames["ProcessingPipelineTab"] = pipeline_frame
-        pipeline_frame.grid(row=0, column=0, sticky="nsew")
+        processing_pipeline_frame = ProcessingPipelineTab(self.content_frame, self)
+        self.frames["ProcessingPipelineTab"] = processing_pipeline_frame
+        processing_pipeline_frame.grid(row=0, column=0, sticky="nsew")
+
+        pretrain_pipeline_frame = PretrainingPipelineTab(self.content_frame, self)
+        self.frames["PretrainingPipelineTab"] = pretrain_pipeline_frame
+        pretrain_pipeline_frame.grid(row=0, column=0, sticky="nsew")
 
         for name, (F, title) in extra_tool_tabs.items():
             frame = F(self.content_frame, self)
@@ -78,12 +85,12 @@ class DatasetToolkit(bstrap.Window):
         
         self.content_frame.grid_rowconfigure(0, weight=1)
         self.content_frame.grid_columnconfigure(0, weight=1)
-
+        
         self.add_nav_button("Processing Pipeline", "ProcessingPipelineTab")
+        self.add_nav_button("Pre-training Pipeline", "PretrainingPipelineTab")
         ttk.Separator(self.nav_frame, orient=HORIZONTAL).pack(fill=X, pady=10)
         ttk.Label(self.nav_frame, text="Extra Tools", bootstyle="secondary").pack(fill=X, pady=(0,5))
         
-        # --- MODIFIED: Loop creates buttons based on the sorted dictionary ---
         for name, (F, title) in sorted(extra_tool_tabs.items(), key=lambda item: item[1][1]):
             self.add_nav_button(title, name)
         
@@ -101,7 +108,7 @@ class DatasetToolkit(bstrap.Window):
         sys.stderr = TextRedirector(self.log_text)
 
         self.show_frame("ProcessingPipelineTab")
-        print("Dataset Toolkit v3.4 Loaded. Added 'Find Unused Chunks' tool.")
+        print("Dataset Toolkit v3.9 Loaded. Consolidated turn structure fixing.")
 
     def resource_path(self, relative_path):
         try:
@@ -162,33 +169,38 @@ class DatasetToolkit(bstrap.Window):
             messagebox.showerror("Error", "Please select a valid initial input file.")
             return
 
+        # --- MODIFIED: The pipeline is now shorter and more robust ---
         pipeline_definition = {
             1: {"name": "Convert JSON to JSONL", "func": convert_json_to_jsonl, "args": lambda i, o: {"input_path": i, "output_path": o}},
-            2: {"name": "Normalize Unicode", "func": normalize_unicode_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            3: {"name": "Cleanup Separators", "func": cleanup_text_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            4: {"name": "Fix OOC Issues", "func": fix_dataset_issues, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            5: {"name": "Remove Standalone Names", "func": remove_standalone_names_main, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            6: {"name": "Clean Asterisks", "func": clean_asterisks_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            7: {"name": "Trim Last Turn", "func": remove_last_user_turn, "args": lambda i, o: type('Args', (), {'input_file': i, 'output_file': o, 'conversation_key': 'conversations', 'role_key': 'from', 'user_role': 'human'})},
-            8: {"name": "Deslop Tool", "func": deslop_dataset, "args": lambda i, o: {"dataset_file": i, "output_file": o, "filter_files": [deslop_filter_file], "threshold": deslop_threshold}}
+            2: {"name": "Remove Failed Scenes", "func": remove_failed_scenes_main, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            3: {"name": "Normalize Unicode", "func": normalize_unicode_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            4: {"name": "Cleanup Separators", "func": cleanup_text_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            5: {"name": "Fix Turn Structure (OOC, Consecutive)", "func": fix_turn_structure, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            6: {"name": "Remove Standalone Names", "func": remove_standalone_names_main, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            7: {"name": "Clean Enclosing Asterisks", "func": clean_asterisks_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            8: {"name": "Trim Last User Turn", "func": remove_last_user_turn, "args": lambda i, o: type('Args', (), {'input_file': i, 'output_file': o, 'conversation_key': 'conversations', 'role_key': 'from', 'user_role': 'human'})},
+            9: {"name": "Fix Unclosed Choices Tags", "func": fix_choices_tags_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            10: {"name": "Fix Thinking/Collapsed Turns", "func": fix_thinking_and_collapsed_turns, "args": lambda i, o: {"input_path": i, "output_path": o}},
+            11: {"name": "Deslop Tool", "func": deslop_dataset, "args": lambda i, o: {"dataset_file": i, "output_file": o, "filter_files": [deslop_filter_file], "threshold": deslop_threshold}}
         }
         
         try:
             last_step_to_run = 0
-            for i in range(8, 0, -1):
+            # --- MODIFIED: Updated range to account for 11 steps ---
+            for i in range(11, 0, -1):
                 if steps_to_run.get(i).get():
                     last_step_to_run = i
                     break
             
             p = Path(initial_input_file)
             current_input_path = str(p.resolve())
-            original_filename = p.name
             input_dir = p.parent
 
             print(f"--- Starting Processing Pipeline for: {p.name} ---\n")
             final_output_file = ""
 
-            for step_num in range(1, 9):
+            # --- MODIFIED: Updated range to account for 11 steps ---
+            for step_num in range(1, 12):
                 if steps_to_run.get(step_num).get():
                     step_info = pipeline_definition[step_num]
                     step_name = step_info["name"]
@@ -206,11 +218,13 @@ class DatasetToolkit(bstrap.Window):
                     print(f"Input: {Path(current_input_path).name}")
                     print(f"Output: {Path(output_path).name}")
                     
-                    if step_num == 7:
+                    # --- MODIFIED: Updated step number for this special case ---
+                    if step_num == 8:
                         args_obj = step_info["args"](current_input_path, output_path)
                         remove_last_user_turn(args=args_obj)
                     else:
-                        if step_num == 8 and (not deslop_filter_file or not Path(deslop_filter_file).exists()):
+                        # --- MODIFIED: Updated step number for this special case ---
+                        if step_num == 11 and (not deslop_filter_file or not Path(deslop_filter_file).exists()):
                             raise ValueError("Deslop filter file is not specified or does not exist.")
                         kwargs = step_info["args"](current_input_path, output_path)
                         step_info["func"](**kwargs)
@@ -218,7 +232,8 @@ class DatasetToolkit(bstrap.Window):
                     print(f"--- Step {step_num} Complete ---\n")
                     current_input_path = output_path
                 else:
-                    print(f"--- Skipping Step {step_num}: {pipeline_definition[step_num]['name']} ---\n")
+                    if step_num in pipeline_definition:
+                        print(f"--- Skipping Step {step_num}: {pipeline_definition[step_num]['name']} ---\n")
             
             print(f"--- Pipeline Finished ---")
             if final_output_file:
@@ -229,6 +244,85 @@ class DatasetToolkit(bstrap.Window):
 
         except Exception as e:
             error_message = f"An error occurred during the pipeline:\n\n{e}"
+            print(f"\n--- PIPELINE FAILED: {error_message} ---")
+            messagebox.showerror("Pipeline Error", error_message)
+
+    def run_pretraining_pipeline(self, initial_input_folder, steps_to_run, output_filename_base):
+        self.log_text.configure(state='normal')
+        self.log_text.delete('1.0', 'end')
+        self.log_text.configure(state='disabled')
+
+        if not initial_input_folder or not Path(initial_input_folder).is_dir():
+            messagebox.showerror("Error", "Please select a valid initial input folder.")
+            return
+        
+        safe_filename_base = "".join(c for c in output_filename_base if c.isalnum() or c in ('_','-')).strip()
+        if not safe_filename_base:
+            messagebox.showerror("Error", "Please provide a valid base name for the final output file.")
+            return
+        
+        if not steps_to_run.get(1).get():
+            messagebox.showerror("Pipeline Error", "Step 1 (Convert TXT to JSONL) must be selected for the pre-training pipeline.")
+            return
+
+        pipeline_definition = {
+            1: {"name": "Convert TXT to JSONL", "func": convert_multiple_txt_to_jsonl, "args": lambda i, o: {"input_directory": i, "output_file_path": o}},
+            2: {"name": "Normalize Unicode", "func": normalize_unicode_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            3: {"name": "Validate and Clean JSONL", "func": validate_and_clean_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+        }
+        
+        try:
+            last_step_to_run = 0
+            for i in range(3, 0, -1):
+                if steps_to_run.get(i).get():
+                    last_step_to_run = i
+                    break
+            
+            p_folder = Path(initial_input_folder)
+            current_input = str(p_folder.resolve())
+            
+            print(f"--- Starting Pre-training Pipeline for folder: {p_folder.name} ---\n")
+            final_output_file = ""
+
+            for step_num in range(1, 4):
+                if steps_to_run.get(step_num).get():
+                    step_info = pipeline_definition[step_num]
+                    step_name = step_info["name"]
+                    
+                    is_final_step = (step_num == last_step_to_run)
+                    if is_final_step:
+                        output_path = str(p_folder / f"{safe_filename_base}.jsonl")
+                    else:
+                        output_path = str(p_folder / f"{safe_filename_base}_step{step_num}.jsonl")
+                    
+                    final_output_file = output_path
+
+                    print(f"--- Running Step {step_num}: {step_name} ---")
+                    input_name = Path(current_input).name
+                    if step_num == 1:
+                        print(f"Input: {input_name} (folder)")
+                    else:
+                        print(f"Input: {input_name}")
+                    print(f"Output: {Path(output_path).name}")
+                    
+                    kwargs = step_info["args"](current_input, output_path)
+                    step_info["func"](**kwargs)
+                    
+                    print(f"--- Step {step_num} Complete ---\n")
+                    current_input = output_path
+                else:
+                    if step_num in pipeline_definition:
+                        print(f"--- Skipping Step {step_num}: {pipeline_definition[step_num]['name']} ---\n")
+            
+            print(f"--- Pipeline Finished ---")
+            if final_output_file:
+                print(f"Final output file: {final_output_file}")
+                messagebox.showinfo("Success", f"Pipeline completed successfully!\n\nFinal output: {Path(final_output_file).name}")
+            else:
+                messagebox.showinfo("Finished", "Pipeline finished, but no steps were selected to run.")
+
+        except Exception as e:
+            error_message = f"An error occurred during the pre-training pipeline:\n\n{e}"
             print(f"\n--- PIPELINE FAILED: {error_message} ---")
             messagebox.showerror("Pipeline Error", error_message)
 
@@ -250,24 +344,29 @@ class ProcessingPipelineTab(BaseTab):
         steps_frame.pack(fill=X, pady=10, padx=5)
 
         self.steps_vars = {}
+        # --- MODIFIED: The step list is now shorter and more logical ---
         steps_info = [
             "Step 1: Convert JSON to JSONL",
-            "Step 2: Normalize Unicode Characters",
-            "Step 3: Cleanup Separators (---, **)",
-            "Step 4: Fix OOC Misattribution",
-            "Step 5: Remove Standalone Names/Roles",
-            "Step 6: Clean Enclosing Asterisks",
-            "Step 7: Trim Last User Turn",
-            "Step 8: Deslop Tool (Filter Content)"
+            "Step 2: Remove Failed Scene Generations",
+            "Step 3: Normalize Unicode Characters",
+            "Step 4: Cleanup Separators (---, **)",
+            "Step 5: Fix Turn Structure (OOC, Consecutive)",
+            "Step 6: Remove Standalone Names/Roles",
+            "Step 7: Clean Enclosing Asterisks",
+            "Step 8: Trim Last User Turn",
+            "Step 9: Fix Unclosed <choices> Tags (Rare)",
+            "Step 10: Fix Thinking/Collapsed Turns (Rare)",
+            "Step 11: Deslop Tool (Filter Content)"
         ]
 
         for i, text in enumerate(steps_info, 1):
-            var = tk.BooleanVar(value=True)
+            default_state = False if i in [5, 9, 10] else True
+            var = tk.BooleanVar(value=default_state)
             self.steps_vars[i] = var
             chk = ttk.Checkbutton(steps_frame, text=text, variable=var, bootstyle="primary")
             chk.pack(anchor=W, padx=10, pady=3)
 
-        deslop_frame = ttk.LabelFrame(self, text="Step 8: Deslop Options", padding=10)
+        deslop_frame = ttk.LabelFrame(self, text="Step 11: Deslop Options", padding=10)
         deslop_frame.pack(fill=X, pady=10, padx=5)
         
         self.filter_file_var = self.controller.create_io_widgets(deslop_frame, 'file', "Filter File:", [("Text files", "*.txt")])
@@ -317,7 +416,49 @@ class ProcessingPipelineTab(BaseTab):
             output_prefix=self.prefix_var.get()
         )
 
-# --- NEW: The tab class for the "Find Unused Chunks" tool ---
+class PretrainingPipelineTab(BaseTab):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        
+        ttk.Label(self, text="Pre-training Data Pipeline", font=("-size 14 -weight bold")).pack(pady=10)
+        ttk.Label(self, text="Run a sequence of tools to prepare data for pre-training, starting from raw text files.", wraplength=500, bootstyle="primary").pack(fill=X, pady=10)
+
+        self.in_folder_var = self.controller.create_io_widgets(self, 'folder', "Input Folder (.txt files):")
+
+        steps_frame = ttk.LabelFrame(self, text="Processing Steps", padding=15)
+        steps_frame.pack(fill=X, pady=10, padx=5)
+
+        self.steps_vars = {}
+        steps_info = [
+            "Step 1: Convert TXT files to JSONL (Required)",
+            "Step 2: Normalize Unicode Characters",
+            "Step 3: Validate and Clean JSONL",
+        ]
+
+        for i, text in enumerate(steps_info, 1):
+            var = tk.BooleanVar(value=True)
+            self.steps_vars[i] = var
+            chk = ttk.Checkbutton(steps_frame, text=text, variable=var, bootstyle="primary")
+            if i == 1:
+                chk.configure(state="disabled") # Step 1 is mandatory
+            chk.pack(anchor=W, padx=10, pady=3)
+
+        naming_frame = ttk.LabelFrame(self, text="Final Output Naming", padding=10)
+        naming_frame.pack(fill=X, pady=(10,5), padx=5)
+        ttk.Label(naming_frame, text="Name for final file (no extension):").pack(side=LEFT, padx=(5,10))
+        self.filename_base_var = tk.StringVar(value="pretrain_data")
+        ttk.Entry(naming_frame, textvariable=self.filename_base_var).pack(side=LEFT, fill=X, expand=True, padx=5)
+        
+        run_btn = ttk.Button(self, text="Run Pre-training Pipeline", command=self.run, bootstyle="success-lg")
+        run_btn.pack(pady=20, ipady=10)
+
+    def run(self):
+        self.controller.run_pretraining_pipeline(
+            initial_input_folder=self.in_folder_var.get(),
+            steps_to_run=self.steps_vars,
+            output_filename_base=self.filename_base_var.get()
+        )
+
 class FindUnusedTab(BaseTab):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
@@ -353,11 +494,11 @@ class CombineTab(BaseTab):
 class TxtToJsonTab(BaseTab):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        ttk.Label(self, text="TXT to JSON", font=("-size 12 -weight bold")).pack(pady=10)
-        ttk.Label(self, text="Convert all .txt files in a folder to a single .json file.", bootstyle="primary").pack(fill=X, pady=10)
+        ttk.Label(self, text="TXT to JSONL", font=("-size 12 -weight bold")).pack(pady=10)
+        ttk.Label(self, text="Convert all .txt files in a folder to a single .jsonl file.", bootstyle="primary").pack(fill=X, pady=10)
         in_dir_var = self.controller.create_io_widgets(self, 'folder', "Input Folder:")
-        out_file_var = self.controller.create_io_widgets(self, 'save_file', "Output File:", [("JSON files", "*.json")])
-        run_btn = ttk.Button(self, text="Run Conversion", command=lambda: self.controller.execute_tool(convert_multiple_txt_to_json, "TXT to JSON", input_directory=in_dir_var.get(), output_file_path=out_file_var.get()), bootstyle="success")
+        out_file_var = self.controller.create_io_widgets(self, 'save_file', "Output File:", [("JSONL files", "*.jsonl")])
+        run_btn = ttk.Button(self, text="Run Conversion", command=lambda: self.controller.execute_tool(convert_multiple_txt_to_jsonl, "TXT to JSONL", input_directory=in_dir_var.get(), output_file_path=out_file_var.get()), bootstyle="success")
         run_btn.pack(pady=20)
 
 class ValidateTab(BaseTab):
