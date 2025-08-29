@@ -1,3 +1,4 @@
+import logging
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import sys
@@ -7,7 +8,6 @@ import ttkbootstrap as bstrap
 from ttkbootstrap.constants import *
 
 try:
-    # --- Tool Imports ---
     from tools.combinejsonl import combine_jsonl_files
     from tools.cleanup_text import cleanup_text_in_jsonl
     from tools.cleanasterisks import process_jsonl_file as clean_asterisks_in_jsonl
@@ -26,13 +26,35 @@ try:
     from tools.fix_thinking_turns import process_jsonl_file as fix_thinking_and_collapsed_turns
     from tools.remove_failed_scenes import remove_failed_scenes_main
     from tools.fix_turn_structure import fix_turn_structure
+    from tools.trim_long_samples import trim_long_samples_main
+    from tools.reprocess_raw import reprocess_raw_main
+    from tools.count_tokens import count_tokens_main
+    from tools.final_cleanup import final_cleanup_main
 
 except ImportError as e:
-    messagebox.showerror("Fatal Error", f"Could not import a tool script. Please ensure the 'tools' subfolder exists and contains all required scripts (including fix_turn_structure.py).\n\nError: {e}")
+    messagebox.showerror("Fatal Error", f"Could not import a tool script. Please ensure the 'tools' subfolder exists and contains all required scripts (including final_cleanup.py).\n\nError: {e}")
     sys.exit(1)
 
 
+class TkinterTextHandler(logging.Handler):
+    """A custom logging handler that sends records to a Tkinter Text widget."""
+    def __init__(self, text_widget: tk.Text):
+        super().__init__()
+        self.text_widget = text_widget
+        self.formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', '%H:%M:%S')
+        self.setFormatter(self.formatter)
+
+    def emit(self, record):
+        """Writes the log record to the text widget."""
+        msg = self.format(record)
+        self.text_widget.configure(state='normal')
+        self.text_widget.insert(tk.END, msg + '\n')
+        self.text_widget.see(tk.END)
+        self.text_widget.configure(state='disabled')
+        self.text_widget.update_idletasks()
+
 class TextRedirector:
+    """A class to redirect print() statements to a Tkinter Text widget."""
     def __init__(self, widget):
         self.widget = widget
     def write(self, text):
@@ -46,8 +68,8 @@ class TextRedirector:
 class DatasetToolkit(bstrap.Window):
     def __init__(self):
         super().__init__(themename="superhero", title="Dataset Processing Toolkit")
-        self.geometry("1367x900")
-        self.minsize(1367, 900)
+        self.geometry("1367x1200")
+        self.minsize(1367, 1200)
 
         main_pane = ttk.PanedWindow(self, orient=HORIZONTAL)
         main_pane.pack(fill=BOTH, expand=True, padx=10, pady=(10,0))
@@ -57,15 +79,17 @@ class DatasetToolkit(bstrap.Window):
 
         self.content_frame = ttk.Frame(main_pane, padding=10)
         main_pane.add(self.content_frame, weight=5)
-        
+
         self.frames = {}
-        
+
         extra_tool_tabs = {
             "CharCounterTab": (CharCounterTab, "Character Counter"),
             "CombineTab": (CombineTab, "Combine JSONL"),
             "FindUnusedTab": (FindUnusedTab, "Find Unused Chunks"),
             "PretrainConvertTab": (PretrainConvertTab, "Pre-train Convert"),
             "RemovePromptTab": (RemovePromptTab, "Remove Sys Prompt"),
+            "ReprocessRawTab": (ReprocessRawTab, "Reprocess Raw Output"),
+            "TokenCounterTab": (TokenCounterTab, "Token Counter"),
             "TxtToJsonTab": (TxtToJsonTab, "TXT -> JSONL"),
             "ValidateTab": (ValidateTab, "Validate JSONL"),
         }
@@ -82,41 +106,51 @@ class DatasetToolkit(bstrap.Window):
             frame = F(self.content_frame, self)
             self.frames[name] = frame
             frame.grid(row=0, column=0, sticky="nsew")
-        
+
         self.content_frame.grid_rowconfigure(0, weight=1)
         self.content_frame.grid_columnconfigure(0, weight=1)
-        
+
         self.add_nav_button("Processing Pipeline", "ProcessingPipelineTab")
         self.add_nav_button("Pre-training Pipeline", "PretrainingPipelineTab")
         ttk.Separator(self.nav_frame, orient=HORIZONTAL).pack(fill=X, pady=10)
         ttk.Label(self.nav_frame, text="Extra Tools", bootstyle="secondary").pack(fill=X, pady=(0,5))
-        
+
         for name, (F, title) in sorted(extra_tool_tabs.items(), key=lambda item: item[1][1]):
             self.add_nav_button(title, name)
-        
+
         log_frame = ttk.LabelFrame(self, text="Log Output", padding=5)
         log_frame.pack(fill=X, expand=False, padx=10, pady=10)
-        
+
         self.log_text = tk.Text(log_frame, height=10, wrap='word', state='disabled', font=("Courier New", 9))
         self.log_text.pack(side=LEFT, fill=X, expand=True)
-        
+
         scrollbar = ttk.Scrollbar(log_frame, orient='vertical', command=self.log_text.yview)
         scrollbar.pack(side=RIGHT, fill='y')
         self.log_text['yscrollcommand'] = scrollbar.set
+
+        # Configure logging and redirect stdout/stderr
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        root_logger.handlers.clear()
+        root_logger.addHandler(TkinterTextHandler(self.log_text))
 
         sys.stdout = TextRedirector(self.log_text)
         sys.stderr = TextRedirector(self.log_text)
 
         self.show_frame("ProcessingPipelineTab")
-        print("Dataset Toolkit v3.9 Loaded. Consolidated turn structure fixing.")
+        logging.info("Dataset Toolkit v4.3 Loaded. Added final cleanup pipeline step.")
 
-    def resource_path(self, relative_path):
+    def resource_path(self, relative_path: str) -> str:
+        """
+        Get absolute path to resource, works for dev and for PyInstaller.
+        `sys._MEIPASS` is a temporary folder created by PyInstaller bundle.
+        """
         try:
             base_path = sys._MEIPASS
-        except Exception:
+        except AttributeError:
             base_path = os.path.abspath(".")
         return os.path.join(base_path, relative_path)
-    
+
     def add_nav_button(self, text, page_name):
         button = ttk.Button(self.nav_frame, text=text, command=lambda: self.show_frame(page_name), bootstyle="info")
         button.pack(fill=X, pady=2)
@@ -150,17 +184,17 @@ class DatasetToolkit(bstrap.Window):
         self.log_text.delete('1.0', 'end')
         self.log_text.configure(state='disabled')
         try:
-            print(f"--- Starting: {title} ---\n")
+            logging.info("--- Starting: %s ---", title)
             tool_function(**kwargs)
-            print(f"\n--- Finished: {title} ---")
-            if title != "Character Count":
+            logging.info("--- Finished: %s ---", title)
+            if title not in ["Character Count", "Token Count"]:
                 messagebox.showinfo("Success", f"{title} completed successfully!")
         except Exception as e:
             error_message = f"An error occurred during {title}:\n\n{e}"
-            print(f"\n--- ERROR: {error_message} ---")
+            logging.critical("--- ERROR: %s ---", error_message, exc_info=True)
             messagebox.showerror("Error", error_message)
 
-    def run_pipeline(self, initial_input_file, steps_to_run, deslop_filter_file, deslop_threshold, output_prefix):
+    def run_pipeline(self, initial_input_file, steps_to_run, deslop_filter_file, deslop_threshold, output_prefix, trim_max_length, trim_model_path):
         self.log_text.configure(state='normal')
         self.log_text.delete('1.0', 'end')
         self.log_text.configure(state='disabled')
@@ -169,7 +203,6 @@ class DatasetToolkit(bstrap.Window):
             messagebox.showerror("Error", "Please select a valid initial input file.")
             return
 
-        # --- MODIFIED: The pipeline is now shorter and more robust ---
         pipeline_definition = {
             1: {"name": "Convert JSON to JSONL", "func": convert_json_to_jsonl, "args": lambda i, o: {"input_path": i, "output_path": o}},
             2: {"name": "Remove Failed Scenes", "func": remove_failed_scenes_main, "args": lambda i, o: {"input_file": i, "output_file": o}},
@@ -178,73 +211,74 @@ class DatasetToolkit(bstrap.Window):
             5: {"name": "Fix Turn Structure (OOC, Consecutive)", "func": fix_turn_structure, "args": lambda i, o: {"input_file": i, "output_file": o}},
             6: {"name": "Remove Standalone Names", "func": remove_standalone_names_main, "args": lambda i, o: {"input_file": i, "output_file": o}},
             7: {"name": "Clean Enclosing Asterisks", "func": clean_asterisks_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            8: {"name": "Trim Last User Turn", "func": remove_last_user_turn, "args": lambda i, o: type('Args', (), {'input_file': i, 'output_file': o, 'conversation_key': 'conversations', 'role_key': 'from', 'user_role': 'human'})},
-            9: {"name": "Fix Unclosed Choices Tags", "func": fix_choices_tags_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
-            10: {"name": "Fix Thinking/Collapsed Turns", "func": fix_thinking_and_collapsed_turns, "args": lambda i, o: {"input_path": i, "output_path": o}},
-            11: {"name": "Deslop Tool", "func": deslop_dataset, "args": lambda i, o: {"dataset_file": i, "output_file": o, "filter_files": [deslop_filter_file], "threshold": deslop_threshold}}
+            8: {"name": "Trim Long Conversations", "func": trim_long_samples_main, "args": lambda i, o: {"input_file": i, "output_file": o, "max_length": trim_max_length, "model_path": trim_model_path}},
+            9: {"name": "Trim Last User Turn", "func": remove_last_user_turn, "args": lambda i, o: type('Args', (), {'input_file': i, 'output_file': o, 'conversation_key': 'conversations', 'role_key': 'from', 'user_role': 'human'})},
+            10: {"name": "Fix Unclosed Choices Tags", "func": fix_choices_tags_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
+            11: {"name": "Fix Thinking/Collapsed Turns", "func": fix_thinking_and_collapsed_turns, "args": lambda i, o: {"input_path": i, "output_path": o}},
+            12: {"name": "Deslop Tool", "func": deslop_dataset, "args": lambda i, o: {"dataset_file": i, "output_file": o, "filter_files": [deslop_filter_file], "threshold": deslop_threshold}},
+            # --- ADDED: Definition for the new Step 13 ---
+            13: {"name": "Final Cleanup (Narrator/Consecutive)", "func": final_cleanup_main, "args": lambda i, o: {"input_file": i, "output_file": o}}
         }
-        
+
         try:
             last_step_to_run = 0
-            # --- MODIFIED: Updated range to account for 11 steps ---
-            for i in range(11, 0, -1):
+            # --- MODIFIED: Updated range to include Step 13 ---
+            for i in range(13, 0, -1):
                 if steps_to_run.get(i).get():
                     last_step_to_run = i
                     break
-            
+
             p = Path(initial_input_file)
             current_input_path = str(p.resolve())
             input_dir = p.parent
 
-            print(f"--- Starting Processing Pipeline for: {p.name} ---\n")
+            logging.info("--- Starting Processing Pipeline for: %s ---", p.name)
             final_output_file = ""
 
-            # --- MODIFIED: Updated range to account for 11 steps ---
-            for step_num in range(1, 12):
+            # --- MODIFIED: Updated range to include Step 13 ---
+            for step_num in range(1, 14):
                 if steps_to_run.get(step_num).get():
                     step_info = pipeline_definition[step_num]
                     step_name = step_info["name"]
-                    
+
                     is_final_step = (step_num == last_step_to_run)
                     if is_final_step and output_prefix:
                         safe_prefix = "".join(c for c in output_prefix if c.isalnum() or c in ('_','-')).strip()
                         output_path = str(input_dir / f"{safe_prefix}{p.stem}.jsonl")
                     else:
                         output_path = str(input_dir / f"{p.stem}_step{step_num}.jsonl")
-                    
+
                     final_output_file = output_path
 
-                    print(f"--- Running Step {step_num}: {step_name} ---")
-                    print(f"Input: {Path(current_input_path).name}")
-                    print(f"Output: {Path(output_path).name}")
-                    
-                    # --- MODIFIED: Updated step number for this special case ---
-                    if step_num == 8:
+                    logging.info("--- Running Step %d: %s ---", step_num, step_name)
+                    logging.info("Input: %s", Path(current_input_path).name)
+                    logging.info("Output: %s", Path(output_path).name)
+
+                    if step_num == 9:
                         args_obj = step_info["args"](current_input_path, output_path)
                         remove_last_user_turn(args=args_obj)
                     else:
-                        # --- MODIFIED: Updated step number for this special case ---
-                        if step_num == 11 and (not deslop_filter_file or not Path(deslop_filter_file).exists()):
+                        if step_num == 12 and (not deslop_filter_file or not Path(deslop_filter_file).exists()):
                             raise ValueError("Deslop filter file is not specified or does not exist.")
                         kwargs = step_info["args"](current_input_path, output_path)
                         step_info["func"](**kwargs)
-                    
-                    print(f"--- Step {step_num} Complete ---\n")
+
+                    logging.info("--- Step %d Complete ---", step_num)
                     current_input_path = output_path
                 else:
                     if step_num in pipeline_definition:
-                        print(f"--- Skipping Step {step_num}: {pipeline_definition[step_num]['name']} ---\n")
-            
-            print(f"--- Pipeline Finished ---")
+                        logging.info("--- Skipping Step %d: %s ---", step_num, pipeline_definition[step_num]['name'])
+
+            logging.info("--- Pipeline Finished ---")
             if final_output_file:
-                 print(f"Final output file: {final_output_file}")
+                 logging.info("Final output file: %s", final_output_file)
                  messagebox.showinfo("Success", f"Pipeline completed successfully!\n\nFinal output: {Path(final_output_file).name}")
             else:
                  messagebox.showinfo("Finished", "Pipeline finished, but no steps were selected to run.")
 
         except Exception as e:
             error_message = f"An error occurred during the pipeline:\n\n{e}"
-            print(f"\n--- PIPELINE FAILED: {error_message} ---")
+            logging.critical("--- PIPELINE FAILED: %s ---", error_message, exc_info=True)
             messagebox.showerror("Pipeline Error", error_message)
 
     def run_pretraining_pipeline(self, initial_input_folder, steps_to_run, output_filename_base):
@@ -255,12 +289,12 @@ class DatasetToolkit(bstrap.Window):
         if not initial_input_folder or not Path(initial_input_folder).is_dir():
             messagebox.showerror("Error", "Please select a valid initial input folder.")
             return
-        
+
         safe_filename_base = "".join(c for c in output_filename_base if c.isalnum() or c in ('_','-')).strip()
         if not safe_filename_base:
             messagebox.showerror("Error", "Please provide a valid base name for the final output file.")
             return
-        
+
         if not steps_to_run.get(1).get():
             messagebox.showerror("Pipeline Error", "Step 1 (Convert TXT to JSONL) must be selected for the pre-training pipeline.")
             return
@@ -270,60 +304,60 @@ class DatasetToolkit(bstrap.Window):
             2: {"name": "Normalize Unicode", "func": normalize_unicode_in_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
             3: {"name": "Validate and Clean JSONL", "func": validate_and_clean_jsonl, "args": lambda i, o: {"input_file": i, "output_file": o}},
         }
-        
+
         try:
             last_step_to_run = 0
             for i in range(3, 0, -1):
                 if steps_to_run.get(i).get():
                     last_step_to_run = i
                     break
-            
+
             p_folder = Path(initial_input_folder)
             current_input = str(p_folder.resolve())
-            
-            print(f"--- Starting Pre-training Pipeline for folder: {p_folder.name} ---\n")
+
+            logging.info("--- Starting Pre-training Pipeline for folder: %s ---", p_folder.name)
             final_output_file = ""
 
             for step_num in range(1, 4):
                 if steps_to_run.get(step_num).get():
                     step_info = pipeline_definition[step_num]
                     step_name = step_info["name"]
-                    
+
                     is_final_step = (step_num == last_step_to_run)
                     if is_final_step:
                         output_path = str(p_folder / f"{safe_filename_base}.jsonl")
                     else:
                         output_path = str(p_folder / f"{safe_filename_base}_step{step_num}.jsonl")
-                    
+
                     final_output_file = output_path
 
-                    print(f"--- Running Step {step_num}: {step_name} ---")
+                    logging.info("--- Running Step %d: %s ---", step_num, step_name)
                     input_name = Path(current_input).name
                     if step_num == 1:
-                        print(f"Input: {input_name} (folder)")
+                        logging.info("Input: %s (folder)", input_name)
                     else:
-                        print(f"Input: {input_name}")
-                    print(f"Output: {Path(output_path).name}")
-                    
+                        logging.info("Input: %s", input_name)
+                    logging.info("Output: %s", Path(output_path).name)
+
                     kwargs = step_info["args"](current_input, output_path)
                     step_info["func"](**kwargs)
-                    
-                    print(f"--- Step {step_num} Complete ---\n")
+
+                    logging.info("--- Step %d Complete ---", step_num)
                     current_input = output_path
                 else:
                     if step_num in pipeline_definition:
-                        print(f"--- Skipping Step {step_num}: {pipeline_definition[step_num]['name']} ---\n")
-            
-            print(f"--- Pipeline Finished ---")
+                        logging.info("--- Skipping Step %d: %s ---", step_num, pipeline_definition[step_num]['name'])
+
+            logging.info("--- Pipeline Finished ---")
             if final_output_file:
-                print(f"Final output file: {final_output_file}")
+                logging.info("Final output file: %s", final_output_file)
                 messagebox.showinfo("Success", f"Pipeline completed successfully!\n\nFinal output: {Path(final_output_file).name}")
             else:
                 messagebox.showinfo("Finished", "Pipeline finished, but no steps were selected to run.")
 
         except Exception as e:
             error_message = f"An error occurred during the pre-training pipeline:\n\n{e}"
-            print(f"\n--- PIPELINE FAILED: {error_message} ---")
+            logging.critical("--- PIPELINE FAILED: %s ---", error_message, exc_info=True)
             messagebox.showerror("Pipeline Error", error_message)
 
 class BaseTab(ttk.Frame):
@@ -334,7 +368,7 @@ class BaseTab(ttk.Frame):
 class ProcessingPipelineTab(BaseTab):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        
+
         ttk.Label(self, text="Dataset Processing Pipeline", font=("-size 14 -weight bold")).pack(pady=10)
         ttk.Label(self, text="Run a sequence of tools on a dataset. Each step creates a new file.", bootstyle="primary", wraplength=500).pack(fill=X, pady=10)
 
@@ -344,7 +378,7 @@ class ProcessingPipelineTab(BaseTab):
         steps_frame.pack(fill=X, pady=10, padx=5)
 
         self.steps_vars = {}
-        # --- MODIFIED: The step list is now shorter and more logical ---
+        # --- MODIFIED: Added Step 13 ---
         steps_info = [
             "Step 1: Convert JSON to JSONL",
             "Step 2: Remove Failed Scene Generations",
@@ -353,36 +387,60 @@ class ProcessingPipelineTab(BaseTab):
             "Step 5: Fix Turn Structure (OOC, Consecutive)",
             "Step 6: Remove Standalone Names/Roles",
             "Step 7: Clean Enclosing Asterisks",
-            "Step 8: Trim Last User Turn",
-            "Step 9: Fix Unclosed <choices> Tags (Rare)",
-            "Step 10: Fix Thinking/Collapsed Turns (Rare)",
-            "Step 11: Deslop Tool (Filter Content)"
+            "Step 8: Trim Long Conversations",
+            "Step 9: Trim Last User Turn",
+            "Step 10: Fix Unclosed <choices> Tags (Rare)",
+            "Step 11: Fix Thinking/Collapsed Turns (Rare)",
+            "Step 12: Deslop Tool (Filter Content)",
+            "Step 13: Final Cleanup (Remove Narrator/Consecutive Turns)"
         ]
 
         for i, text in enumerate(steps_info, 1):
-            default_state = False if i in [5, 9, 10] else True
+            default_state = True
+            # --- MODIFIED: Added Step 13 to be off by default ---
+            # It is an aggressive, "last resort" step.
+            if i in [5, 10, 11, 13]:
+                default_state = False
+
             var = tk.BooleanVar(value=default_state)
             self.steps_vars[i] = var
             chk = ttk.Checkbutton(steps_frame, text=text, variable=var, bootstyle="primary")
             chk.pack(anchor=W, padx=10, pady=3)
 
-        deslop_frame = ttk.LabelFrame(self, text="Step 11: Deslop Options", padding=10)
-        deslop_frame.pack(fill=X, pady=10, padx=5)
-        
+        trim_frame = ttk.LabelFrame(self, text="Step 8: Trimming Options", padding=10)
+        trim_frame.pack(fill=X, pady=5, padx=5)
+
+        model_path_frame = ttk.Frame(trim_frame)
+        ttk.Label(model_path_frame, text="Model Path:", width=15).pack(side=LEFT, padx=5)
+
+        default_tokenizer_path = controller.resource_path("local_tokenizer")
+        self.trim_model_path_var = tk.StringVar(value=default_tokenizer_path)
+        ttk.Entry(model_path_frame, textvariable=self.trim_model_path_var).pack(side=LEFT, expand=True, fill=X, padx=5)
+        model_path_frame.pack(fill=X, pady=2)
+
+        max_len_frame = ttk.Frame(trim_frame)
+        ttk.Label(max_len_frame, text="Max Tokens:", width=15).pack(side=LEFT, padx=5)
+        self.trim_max_len_var = tk.StringVar(value="8192")
+        ttk.Entry(max_len_frame, textvariable=self.trim_max_len_var, width=10).pack(side=LEFT, padx=5)
+        max_len_frame.pack(fill=X, pady=2)
+
+        deslop_frame = ttk.LabelFrame(self, text="Step 12: Deslop Options", padding=10)
+        deslop_frame.pack(fill=X, pady=5, padx=5)
+
         self.filter_file_var = self.controller.create_io_widgets(deslop_frame, 'file', "Filter File:", [("Text files", "*.txt")])
         try:
             default_filter_path = self.controller.resource_path("f.txt")
             if os.path.exists(default_filter_path):
                 self.filter_file_var.set(default_filter_path)
         except Exception:
-            pass 
+            pass
 
         threshold_frame = ttk.Frame(deslop_frame)
         threshold_frame.pack(fill=X, pady=5)
         self.use_threshold_var = tk.BooleanVar(value=False)
         self.threshold_spinbox = ttk.Spinbox(threshold_frame, from_=0.1, to=10.0, increment=0.1, state="disabled", width=8)
         self.threshold_spinbox.set(1.5)
-        
+
         def toggle_spinbox():
             self.threshold_spinbox.configure(state="normal" if self.use_threshold_var.get() else "disabled")
 
@@ -395,7 +453,7 @@ class ProcessingPipelineTab(BaseTab):
         ttk.Label(prefix_frame, text="Prefix for final file:").pack(side=LEFT, padx=(5,10))
         self.prefix_var = tk.StringVar(value="cleaned_")
         ttk.Entry(prefix_frame, textvariable=self.prefix_var).pack(side=LEFT, fill=X, expand=True, padx=5)
-        
+
         run_btn = ttk.Button(self, text="Run Processing Pipeline", command=self.run, bootstyle="success-lg")
         run_btn.pack(pady=20, ipady=10)
 
@@ -407,19 +465,32 @@ class ProcessingPipelineTab(BaseTab):
             except ValueError:
                 messagebox.showerror("Invalid Input", "Threshold must be a valid number.")
                 return
-        
+
+        try:
+            trim_max_length = int(self.trim_max_len_var.get())
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Max Tokens for trimming must be a valid integer.")
+            return
+
+        trim_model_path = self.trim_model_path_var.get()
+        if not trim_model_path:
+            messagebox.showerror("Invalid Input", "Model Path for trimming cannot be empty.")
+            return
+
         self.controller.run_pipeline(
             initial_input_file=self.in_file_var.get(),
             steps_to_run=self.steps_vars,
             deslop_filter_file=self.filter_file_var.get(),
             deslop_threshold=threshold_value,
-            output_prefix=self.prefix_var.get()
+            output_prefix=self.prefix_var.get(),
+            trim_max_length=trim_max_length,
+            trim_model_path=trim_model_path
         )
 
 class PretrainingPipelineTab(BaseTab):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        
+
         ttk.Label(self, text="Pre-training Data Pipeline", font=("-size 14 -weight bold")).pack(pady=10)
         ttk.Label(self, text="Run a sequence of tools to prepare data for pre-training, starting from raw text files.", wraplength=500, bootstyle="primary").pack(fill=X, pady=10)
 
@@ -440,7 +511,7 @@ class PretrainingPipelineTab(BaseTab):
             self.steps_vars[i] = var
             chk = ttk.Checkbutton(steps_frame, text=text, variable=var, bootstyle="primary")
             if i == 1:
-                chk.configure(state="disabled") # Step 1 is mandatory
+                chk.configure(state="disabled")
             chk.pack(anchor=W, padx=10, pady=3)
 
         naming_frame = ttk.LabelFrame(self, text="Final Output Naming", padding=10)
@@ -448,7 +519,7 @@ class PretrainingPipelineTab(BaseTab):
         ttk.Label(naming_frame, text="Name for final file (no extension):").pack(side=LEFT, padx=(5,10))
         self.filename_base_var = tk.StringVar(value="pretrain_data")
         ttk.Entry(naming_frame, textvariable=self.filename_base_var).pack(side=LEFT, fill=X, expand=True, padx=5)
-        
+
         run_btn = ttk.Button(self, text="Run Pre-training Pipeline", command=self.run, bootstyle="success-lg")
         run_btn.pack(pady=20, ipady=10)
 
@@ -459,23 +530,42 @@ class PretrainingPipelineTab(BaseTab):
             output_filename_base=self.filename_base_var.get()
         )
 
+class ReprocessRawTab(BaseTab):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Reprocess Raw Output", font=("-size 12 -weight bold")).pack(pady=10)
+        ttk.Label(self, text="Parses the 'story' field from a raw JSON file into a final, structured ShareGPT JSONL file.",
+                  wraplength=550, bootstyle="primary").pack(fill=X, pady=10)
+
+        in_file_var = self.controller.create_io_widgets(self, 'file', "Raw Input File:", [("JSON files", "*.json")])
+        out_file_var = self.controller.create_io_widgets(self, 'save_file', "Final Output File:", [("JSONL files", "*.jsonl")])
+
+        run_btn = ttk.Button(self, text="Run Reprocessing",
+                             command=lambda: self.controller.execute_tool(
+                                 reprocess_raw_main,
+                                 "Reprocess Raw Output",
+                                 input_path=in_file_var.get(),
+                                 output_path=out_file_var.get()
+                             ), bootstyle="success")
+        run_btn.pack(pady=20)
+
 class FindUnusedTab(BaseTab):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
         ttk.Label(self, text="Find Unused Chunks", font=("-size 12 -weight bold")).pack(pady=10)
-        ttk.Label(self, text="Compares a master JSON list to a resulting JSON file to find and save unused text chunks.", 
+        ttk.Label(self, text="Compares a master JSON list to a resulting JSON file to find and save unused text chunks.",
                   wraplength=550, bootstyle="primary").pack(fill=X, pady=10)
-        
+
         master_file_var = self.controller.create_io_widgets(self, 'file', "Master File:", [("JSON files", "*.json")])
         resulting_file_var = self.controller.create_io_widgets(self, 'file', "Resulting File:", [("JSON files", "*.json")])
         output_file_var = self.controller.create_io_widgets(self, 'save_file', "Output File:", [("JSON files", "*.json")])
-        
-        run_btn = ttk.Button(self, text="Find Unused Chunks", 
+
+        run_btn = ttk.Button(self, text="Find Unused Chunks",
                              command=lambda: self.controller.execute_tool(
-                                 find_unused_text_chunks, 
-                                 "Find Unused Chunks", 
-                                 master_file=master_file_var.get(), 
-                                 resulting_file=resulting_file_var.get(), 
+                                 find_unused_text_chunks,
+                                 "Find Unused Chunks",
+                                 master_file=master_file_var.get(),
+                                 resulting_file=resulting_file_var.get(),
                                  output_file=output_file_var.get()
                              ), bootstyle="success")
         run_btn.pack(pady=20)
@@ -540,12 +630,36 @@ class CharCounterTab(BaseTab):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
         ttk.Label(self, text="Character Counter", font=("-size 12 -weight bold")).pack(pady=10)
-        ttk.Label(self, text="Analyze character count statistics for a JSONL dataset.", bootstyle="primary").pack(fill=X, pady=10)
-        in_file_var = self.controller.create_io_widgets(self, 'file', "Input File:", [("JSON/JSONL files", "*.json*"), ("All files", "*.*")])
-        run_btn = ttk.Button(self, text="Run Analysis", command=lambda: self.controller.execute_tool(count_characters_in_jsonl, "Character Count", input_file=in_file_var.get()), bootstyle="success")
+        ttk.Label(self, text="Analyze character count statistics for a JSONL dataset.", wraplength=550, bootstyle="primary").pack(fill=X, pady=10)
+        in_file_var = self.controller.create_io_widgets(self, 'file', "Input File:", [("JSONL files", "*.jsonl")])
+        run_btn = ttk.Button(self, text="Count Characters", command=lambda: self.controller.execute_tool(count_characters_in_jsonl, "Character Count", input_file=in_file_var.get()), bootstyle="success")
         run_btn.pack(pady=20)
 
+class TokenCounterTab(BaseTab):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Token Counter", font=("-size 12 -weight bold")).pack(pady=10)
+        ttk.Label(self, text="Counts the total number of tokens in a JSONL file using a specified tokenizer.",
+                  wraplength=550, bootstyle="primary").pack(fill=X, pady=10)
 
-if __name__ == '__main__':
+        in_file_var = self.controller.create_io_widgets(self, 'file', "Input File:", [("JSONL files", "*.jsonl")])
+
+        model_path_frame = ttk.Frame(self)
+        ttk.Label(model_path_frame, text="Model/Tokenizer Path:", width=20).pack(side=LEFT, padx=5)
+        default_tokenizer_path = controller.resource_path("local_tokenizer")
+        model_path_var = tk.StringVar(value=default_tokenizer_path)
+        ttk.Entry(model_path_frame, textvariable=model_path_var).pack(side=LEFT, expand=True, fill=X, padx=5)
+        model_path_frame.pack(fill=X, pady=5)
+
+        run_btn = ttk.Button(self, text="Count Tokens",
+                             command=lambda: self.controller.execute_tool(
+                                 count_tokens_main,
+                                 "Token Count",
+                                 file_path=in_file_var.get(),
+                                 model_path=model_path_var.get()
+                             ), bootstyle="success")
+        run_btn.pack(pady=20)
+
+if __name__ == "__main__":
     app = DatasetToolkit()
     app.mainloop()
